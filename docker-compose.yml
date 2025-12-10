@@ -1,0 +1,37 @@
+version: '3.9'
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tasks
+    ports:
+      - "5432:5432"
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+  api:
+    build: .
+    command: ["api"]
+    environment:
+      POSTGRES_DSN: postgres://postgres:postgres@postgres:5432/tasks?sslmode=disable
+      REDIS_ADDR: redis:6379
+      HTTP_PORT: "8080"
+      APP_ENV: dev
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8080:8080"
+  worker:
+    build: .
+    command: ["worker"]
+    environment:
+      POSTGRES_DSN: postgres://postgres:postgres@postgres:5432/tasks?sslmode=disable
+      REDIS_ADDR: redis:6379
+      APP_ENV: dev
+    depends_on:
+      - postgres
+      - redis
