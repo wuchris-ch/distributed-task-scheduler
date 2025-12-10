@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Image Processing Pipeline</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #f7f9fb;
+      color: #1f2933;
+    }
+    h1 {
+      margin: 0 0 16px;
+      font-size: 24px;
+    }
+    .card {
+      background: #fff;
+      border: 1px solid #e4e8ee;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 10px 30px rgba(34, 41, 47, 0.08);
+      margin-bottom: 20px;
+    }
+    label {
+      font-weight: 600;
+      display: block;
+      margin-bottom: 8px;
+    }
+    input[type="file"] {
+      display: block;
+      margin-bottom: 12px;
+    }
+    button {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+    }
+    button:disabled {
+      background: #94a3b8;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #e4e8ee;
+      text-align: left;
+      font-size: 14px;
+    }
+    th {
+      background: #f1f5f9;
+      font-weight: 700;
+    }
+    .status {
+      font-weight: 700;
+      text-transform: capitalize;
+    }
+    .status.queued { color: #2563eb; }
+    .status.in_progress { color: #f59e0b; }
+    .status.succeeded, .status.completed { color: #16a34a; }
+    .status.failed { color: #dc2626; }
+    .thumb {
+      width: 90px;
+      height: 90px;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid #e4e8ee;
+      background: #f8fafc;
+    }
+    #message {
+      margin-top: 8px;
+      font-size: 14px;
+      color: #dc2626;
+    }
+  </style>
+</head>
+<body>
+  <h1>Image Processing Pipeline</h1>
+  <div class="card">
+    <form id="uploadForm">
+      <label for="fileInput">Upload Image</label>
+      <input id="fileInput" type="file" name="file" accept="image/*" required />
+      <button id="uploadBtn" type="submit">Start Job</button>
+      <div id="message"></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;">Job Table</h2>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:18%;">Job ID</th>
+          <th style="width:22%;">File</th>
+          <th style="width:18%;">Status</th>
+          <th>Result</th>
+        </tr>
+      </thead>
+      <tbody id="jobsBody">
+        <tr id="emptyRow"><td colspan="4" style="text-align:center;color:#64748b;">No jobs yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    const form = document.getElementById('uploadForm');
+    const fileInput = document.getElementById('fileInput');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const messageEl = document.getElementById('message');
+    const jobsBody = document.getElementById('jobsBody');
+    const emptyRow = document.getElementById('emptyRow');
+
+    const jobs = new Map(); // jobId -> { row, poller }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      messageEl.textContent = '';
+
+      const file = fileInput.files[0];
+      if (!file) {
+        messageEl.textContent = 'Please choose an image file.';
+        return;
+      }
+
+      uploadBtn.disabled = true;
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const res = await fetch('/upload', { method: 'POST', body: formData });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || 'Upload failed');
+        }
+        const data = await res.json();
+        const jobId = data.job_id;
+        const outputFilename = data.output_filename || '';
+        const status = data.status || 'queued';
+
+        addJobRow({ jobId, filename: file.name, status, outputFilename });
+        startPolling({ jobId, filename: file.name });
+
+        form.reset();
+      } catch (err) {
+        console.error(err);
+        messageEl.textContent = err.message || 'Upload failed.';
+      } finally {
+        uploadBtn.disabled = false;
+      }
+    });
+
+    function addJobRow({ jobId, filename, status, outputFilename }) {
+      if (emptyRow) {
+        emptyRow.remove();
+      }
+      const row = document.createElement('tr');
+      row.dataset.jobId = jobId;
+
+      const idCell = document.createElement('td');
+      idCell.textContent = jobId;
+
+      const nameCell = document.createElement('td');
+      nameCell.textContent = filename;
+
+      const statusCell = document.createElement('td');
+      statusCell.className = 'status ' + status;
+      statusCell.textContent = status.replace('_', ' ');
+
+      const resultCell = document.createElement('td');
+      if (status === 'succeeded' || status === 'completed') {
+        insertThumbnail(resultCell, outputFilename);
+      } else {
+        resultCell.textContent = '—';
+      }
+
+      row.append(idCell, nameCell, statusCell, resultCell);
+      jobsBody.prepend(row);
+
+      jobs.set(jobId, { row, poller: null });
+    }
+
+    function updateJobRow(jobId, status, outputFilename) {
+      const record = jobs.get(jobId);
+      if (!record) return;
+      const statusCell = record.row.querySelector('.status');
+      statusCell.className = 'status ' + status;
+      statusCell.textContent = status.replace('_', ' ');
+
+      const resultCell = record.row.lastElementChild;
+      if (status === 'succeeded' || status === 'completed') {
+        insertThumbnail(resultCell, outputFilename);
+      } else if (status === 'failed') {
+        resultCell.textContent = 'Failed';
+      }
+    }
+
+    function insertThumbnail(cell, filename) {
+      if (!filename) {
+        cell.textContent = 'Ready';
+        return;
+      }
+      const img = document.createElement('img');
+      img.src = `/images/${encodeURIComponent(filename)}`;
+      img.alt = filename;
+      img.className = 'thumb';
+      cell.innerHTML = '';
+      cell.appendChild(img);
+    }
+
+    function startPolling({ jobId, filename }) {
+      const poll = async () => {
+        try {
+          const res = await fetch(`/status/${jobId}`);
+          if (!res.ok) {
+            throw new Error('Unable to fetch status');
+          }
+          const data = await res.json();
+          const status = data.status || data.raw_status || 'queued';
+          const outputFilename = data.output_filename || data.output || '';
+
+          updateJobRow(jobId, status, outputFilename);
+
+          if (status === 'completed' || status === 'succeeded' || status === 'failed') {
+            clearInterval(jobs.get(jobId)?.poller);
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      };
+
+      poll(); // initial
+      const timer = setInterval(poll, 1000);
+      const record = jobs.get(jobId);
+      if (record) {
+        record.poller = timer;
+        jobs.set(jobId, record);
+      }
+    }
+  </script>
+</body>
+</html>

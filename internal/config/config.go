@@ -27,6 +27,8 @@ type Config struct {
 	PriorityQueues       []string
 	DLQName              string
 	ScheduledBatchSize   int
+	UploadsDir           string
+	StaticDir            string
 	ImageOutputDir       string
 	ImageDownloadTimeout time.Duration
 	ImageMaxBytes        int64
@@ -59,6 +61,8 @@ func Load() Config {
 		PriorityQueues:       getEnvList("PRIORITY_QUEUES", []string{"high", "default", "low"}),
 		DLQName:              getEnv("DLQ_NAME", "queue:dlq"),
 		ScheduledBatchSize:   getEnvInt("SCHEDULED_BATCH_SIZE", 100),
+		UploadsDir:           getEnv("UPLOADS_DIR", "./uploads"),
+		StaticDir:            getEnv("STATIC_DIR", "./web"),
 		ImageOutputDir:       getEnv("IMAGE_OUTPUT_DIR", "./output"),
 		ImageDownloadTimeout: getEnvDuration("IMAGE_DOWNLOAD_TIMEOUT", 30*time.Second),
 		ImageMaxBytes:        getEnvInt64("IMAGE_MAX_BYTES", 25*1024*1024),

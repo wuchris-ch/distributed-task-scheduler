@@ -45,6 +45,7 @@ func main() {
 		log.Fatalf("init image handler: %v", err)
 	}
 	processor.RegisterHandler("resize_image", imageHandler.Handle)
+	processor.RegisterHandler("image:resize", workerproc.NewLocalResizeHandler().Handle)
 
 	go func() {
 		if err := http.ListenAndServe(cfg.MetricsAddr, telemetry.Handler()); err != nil {

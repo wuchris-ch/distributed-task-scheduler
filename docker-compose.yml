@@ -20,11 +20,15 @@ services:
       REDIS_ADDR: redis:6379
       HTTP_PORT: "8080"
       APP_ENV: dev
+      UPLOADS_DIR: /app/uploads
+      STATIC_DIR: /app/web
     depends_on:
       - postgres
       - redis
     ports:
       - "8080:8080"
+    volumes:
+      - ./uploads:/app/uploads
   worker:
     build: .
     command: ["worker"]
@@ -32,6 +36,22 @@ services:
       POSTGRES_DSN: postgres://postgres:postgres@postgres:5432/tasks?sslmode=disable
       REDIS_ADDR: redis:6379
       APP_ENV: dev
+      UPLOADS_DIR: /app/uploads
     depends_on:
       - postgres
       - redis
+    volumes:
+      - ./uploads:/app/uploads
+  worker-2:
+    build: .
+    command: ["worker"]
+    environment:
+      POSTGRES_DSN: postgres://postgres:postgres@postgres:5432/tasks?sslmode=disable
+      REDIS_ADDR: redis:6379
+      APP_ENV: dev
+      UPLOADS_DIR: /app/uploads
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./uploads:/app/uploads

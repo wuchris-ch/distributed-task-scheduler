@@ -3,7 +3,10 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -18,10 +21,10 @@ import (
 
 // Server wires HTTP handlers for the producer API.
 type Server struct {
-	cfg      config.Config
-	store    *store.Store
-	queue    *queue.RedisQueue
-	limiter  *ratelimit.TokenBucket
+	cfg     config.Config
+	store   *store.Store
+	queue   *queue.RedisQueue
+	limiter *ratelimit.TokenBucket
 }
 
 // New constructs the API server.
@@ -38,12 +41,21 @@ func New(cfg config.Config, st *store.Store, q *queue.RedisQueue, limiter *ratel
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 
+	uploadsFS := http.StripPrefix("/images/", http.FileServer(http.Dir(s.cfg.UploadsDir)))
+
+	r.Get("/", s.handleIndex)
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
 	r.Mount("/metrics", telemetry.Handler())
+
+	r.Get("/images/*", func(w http.ResponseWriter, r *http.Request) {
+		uploadsFS.ServeHTTP(w, r)
+	})
+	r.Post("/upload", s.handleUpload)
+	r.Get("/status/{id}", s.handleStatus)
 
 	r.Post("/jobs", s.handleEnqueue)
 	r.Get("/jobs/{id}", s.handleGetJob)
@@ -53,18 +65,18 @@ func (s *Server) Router() http.Handler {
 }
 
 type enqueueRequest struct {
-	Type           string                 `json:"type"`
-	Payload        map[string]any         `json:"payload"`
-	IdempotencyKey string                 `json:"idempotency_key"`
-	RunAt          *time.Time             `json:"run_at"`
-	DelaySeconds   int                    `json:"delay_seconds"`
-	Priority       string                 `json:"priority"`
-	MaxAttempts    int                    `json:"max_attempts"`
+	Type           string         `json:"type"`
+	Payload        map[string]any `json:"payload"`
+	IdempotencyKey string         `json:"idempotency_key"`
+	RunAt          *time.Time     `json:"run_at"`
+	DelaySeconds   int            `json:"delay_seconds"`
+	Priority       string         `json:"priority"`
+	MaxAttempts    int            `json:"max_attempts"`
 }
 
 type enqueueResponse struct {
-	Job       models.Job `json:"job"`
-	Idempotent bool      `json:"idempotent"`
+	Job        models.Job `json:"job"`
+	Idempotent bool       `json:"idempotent"`
 }
 
 func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
@@ -166,6 +178,129 @@ func (s *Server) handleDLQ(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	indexPath := filepath.Join(s.cfg.StaticDir, "index.html")
+	if _, err := os.Stat(indexPath); err != nil {
+		http.Error(w, "frontend not found", http.StatusInternalServerError)
+		return
+	}
+	http.ServeFile(w, r, indexPath)
+}
+
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	maxBytes := s.cfg.ImageMaxBytes
+	if maxBytes == 0 {
+		maxBytes = 25 * 1024 * 1024
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes+1024*1024)
+	if err := r.ParseMultipartForm(maxBytes + 1024*1024); err != nil {
+		http.Error(w, "invalid multipart form", http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "file is required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	fileName := filepath.Base(header.Filename)
+	if fileName == "" {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+
+	if err := os.MkdirAll(s.cfg.UploadsDir, 0o755); err != nil {
+		http.Error(w, "unable to prepare uploads dir", http.StatusInternalServerError)
+		return
+	}
+
+	uploadPath := filepath.Join(s.cfg.UploadsDir, fileName)
+	outFile, err := os.Create(uploadPath)
+	if err != nil {
+		http.Error(w, "failed to save file", http.StatusInternalServerError)
+		return
+	}
+	defer outFile.Close()
+
+	if _, err := io.Copy(outFile, file); err != nil {
+		http.Error(w, "failed to write file", http.StatusInternalServerError)
+		return
+	}
+
+	outputFile := fmt.Sprintf("thumb_%s", fileName)
+	outputPath := filepath.Join(s.cfg.UploadsDir, outputFile)
+
+	payload := map[string]any{
+		"type":            "image:resize",
+		"filepath":        uploadPath,
+		"output_path":     outputPath,
+		"output_filename": outputFile,
+	}
+
+	job, idempotent, err := s.store.CreateJob(r.Context(), store.CreateJobParams{
+		Type:           "image:resize",
+		Priority:       "default",
+		Tenant:         tenantFromRequest(r),
+		Payload:        payload,
+		RunAt:          time.Now(),
+		MaxAttempts:    s.cfg.MaxAttempts,
+		IdempotencyTTL: s.cfg.IdempotencyTTL,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if !idempotent {
+		if err := s.queue.Enqueue(r.Context(), job.ID, job.Priority, job.NextRunAt); err != nil {
+			msg := err.Error()
+			_ = s.store.UpdateJobStatus(r.Context(), job.ID, models.StatusFailed, job.Attempts, job.NextRunAt, &msg)
+			http.Error(w, "enqueue failed", http.StatusInternalServerError)
+			return
+		}
+		_ = s.store.AppendAudit(r.Context(), job.ID, "enqueued", fmt.Sprintf("upload file=%s", fileName))
+		telemetry.EnqueueCounter.Inc()
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"job_id":          job.ID,
+		"status":          "queued",
+		"output_filename": outputFile,
+	})
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	job, err := s.store.GetJob(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	clientStatus := job.Status
+	if job.Status == models.StatusSucceeded {
+		clientStatus = "completed"
+	}
+
+	outputName := ""
+	if v, ok := job.Payload["output_filename"].(string); ok {
+		outputName = filepath.Base(v)
+	} else if v, ok := job.Payload["output_path"].(string); ok {
+		outputName = filepath.Base(v)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"job_id":          job.ID,
+		"status":          clientStatus,
+		"raw_status":      job.Status,
+		"output_filename": outputName,
+		"output_path":     job.Payload["output_path"],
+		"last_error":      job.LastError,
+	})
 }
 
 func tenantFromRequest(r *http.Request) string {
