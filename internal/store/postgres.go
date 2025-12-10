@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"distributed-task-scheduler/internal/models"
 )
@@ -41,15 +41,15 @@ func (s *Store) Close() {
 
 // CreateJobParams collects inputs required to insert a job.
 type CreateJobParams struct {
-	Type            string
-	Priority        string
-	Tenant          string
-	Payload         map[string]any
-	IdempotencyKey  string
-	RunAt           time.Time
-	MaxAttempts     int
-	IdempotencyTTL  time.Duration
-	DefaultStatus   string
+	Type           string
+	Priority       string
+	Tenant         string
+	Payload        map[string]any
+	IdempotencyKey string
+	RunAt          time.Time
+	MaxAttempts    int
+	IdempotencyTTL time.Duration
+	DefaultStatus  string
 }
 
 // CreateJob inserts a job row, honoring idempotency if provided.
@@ -67,13 +67,13 @@ func (s *Store) CreateJob(ctx context.Context, p CreateJobParams) (models.Job, b
 
 	payloadJSON, err := json.Marshal(p.Payload)
 	if err != nil {
-		return models.Job{}, fmt.Errorf("marshal payload: %w", err)
+		return models.Job{}, false, fmt.Errorf("marshal payload: %w", err)
 	}
 
 	// If an idempotency key already exists, short-circuit before creating anything.
 	if p.IdempotencyKey != "" {
 		if existing, found, err := s.FindByIdempotencyKey(ctx, p.IdempotencyKey); err != nil {
-			return models.Job{}, err
+			return models.Job{}, false, err
 		} else if found {
 			return existing, true, nil
 		}
@@ -81,7 +81,7 @@ func (s *Store) CreateJob(ctx context.Context, p CreateJobParams) (models.Job, b
 
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return models.Job{}, fmt.Errorf("begin tx: %w", err)
+		return models.Job{}, false, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx) // safe no-op on commit
 
@@ -93,7 +93,7 @@ func (s *Store) CreateJob(ctx context.Context, p CreateJobParams) (models.Job, b
 		VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $9)
 	`, id, p.Type, p.Priority, p.Tenant, payloadJSON, p.DefaultStatus, p.MaxAttempts, p.RunAt, now)
 	if err != nil {
-		return models.Job{}, fmt.Errorf("insert job: %w", err)
+		return models.Job{}, false, fmt.Errorf("insert job: %w", err)
 	}
 
 	if p.IdempotencyKey != "" {
@@ -104,26 +104,26 @@ func (s *Store) CreateJob(ctx context.Context, p CreateJobParams) (models.Job, b
 			ON CONFLICT (key) DO NOTHING
 		`, p.IdempotencyKey, id, expires)
 		if err != nil {
-			return models.Job{}, fmt.Errorf("insert idempotency key: %w", err)
+			return models.Job{}, false, fmt.Errorf("insert idempotency key: %w", err)
 		}
 		if tag.RowsAffected() == 0 {
 			// Someone else claimed the key after our initial check; return existing job.
 			if err := tx.Rollback(ctx); err != nil {
-				return models.Job{}, fmt.Errorf("rollback after idempotency conflict: %w", err)
+				return models.Job{}, false, fmt.Errorf("rollback after idempotency conflict: %w", err)
 			}
 			existing, found, err := s.FindByIdempotencyKey(ctx, p.IdempotencyKey)
 			if err != nil {
-				return models.Job{}, err
+				return models.Job{}, false, err
 			}
 			if !found {
-				return models.Job{}, errors.New("idempotency conflict but no existing job found")
+				return models.Job{}, false, errors.New("idempotency conflict but no existing job found")
 			}
 			return existing, true, nil
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return models.Job{}, fmt.Errorf("commit: %w", err)
+		return models.Job{}, false, fmt.Errorf("commit: %w", err)
 	}
 
 	return models.Job{

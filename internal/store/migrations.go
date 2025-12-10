@@ -7,12 +7,12 @@ import (
 	"strings"
 )
 
-//go:embed ../migrations/*.sql
+//go:embed migrations/*.sql
 var migrationFiles embed.FS
 
 // RunMigrations executes the embedded SQL migrations in order.
 func (s *Store) RunMigrations(ctx context.Context) error {
-	entries, err := migrationFiles.ReadDir("../migrations")
+	entries, err := migrationFiles.ReadDir("migrations")
 	if err != nil {
 		return fmt.Errorf("read migrations dir: %w", err)
 	}
@@ -20,7 +20,7 @@ func (s *Store) RunMigrations(ctx context.Context) error {
 		if e.IsDir() {
 			continue
 		}
-		content, err := migrationFiles.ReadFile("../migrations/" + e.Name())
+		content, err := migrationFiles.ReadFile("migrations/" + e.Name())
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", e.Name(), err)
 		}

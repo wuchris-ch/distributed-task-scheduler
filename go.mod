@@ -13,6 +13,7 @@ require (
 	github.com/jackc/pgx/v5 v5.5.4
 	github.com/prometheus/client_golang v1.17.0
 	github.com/redis/go-redis/v9 v9.6.1
+	golang.org/x/image v0.0.0-20191009234506-e7c1f5e7dbb8
 )
 
 require (
@@ -46,7 +47,6 @@ require (
 	github.com/prometheus/procfs v0.11.1 // indirect
 	github.com/yuin/gopher-lua v0.0.0-20220504180219-658193537a64 // indirect
 	golang.org/x/crypto v0.17.0 // indirect
-	golang.org/x/image v0.0.0-20191009234506-e7c1f5e7dbb8 // indirect
 	golang.org/x/sync v0.3.0 // indirect
 	golang.org/x/sys v0.15.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
