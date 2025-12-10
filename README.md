@@ -620,22 +620,7 @@ ON CONFLICT (key) DO NOTHING;
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
----
-
-## 👤 Author
-
-**Chris Wu**  
-🔗 [GitHub](https://github.com/wuchris-ch) • 💼 [LinkedIn](https://linkedin.com/in/wuchris-ch)
-
----
-
 ## 🙌 Acknowledgments
 
 - Inspired by production systems at **[Inngest](https://www.inngest.com/)**, **[Temporal](https://temporal.io/)**, and **[Celery](https://docs.celeryq.dev/)**
 - Built as a learning project to demonstrate distributed systems expertise
-
----
-
-<p align="center">
-  <b>⭐ If you find this project interesting, please star it on GitHub! ⭐</b>
-</p>
