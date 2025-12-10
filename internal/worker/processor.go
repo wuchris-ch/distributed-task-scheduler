@@ -17,13 +17,33 @@ import (
 
 // Processor drives the worker execution loop.
 type Processor struct {
-	cfg   config.Config
-	queue *queue.RedisQueue
-	store *store.Store
+	cfg            config.Config
+	queue          *queue.RedisQueue
+	store          *store.Store
+	handlers       map[string]Handler
+	defaultHandler Handler
 }
 
+// Handler executes a job for a given type.
+type Handler func(ctx context.Context, job models.Job) error
+
 func NewProcessor(cfg config.Config, q *queue.RedisQueue, st *store.Store) *Processor {
-	return &Processor{cfg: cfg, queue: q, store: st}
+	p := &Processor{
+		cfg:      cfg,
+		queue:    q,
+		store:    st,
+		handlers: make(map[string]Handler),
+	}
+	p.defaultHandler = p.handleDefault
+	return p
+}
+
+// RegisterHandler binds a handler to a job type.
+func (p *Processor) RegisterHandler(jobType string, handler Handler) {
+	if jobType == "" || handler == nil {
+		return
+	}
+	p.handlers[jobType] = handler
 }
 
 // Run starts the main worker loop until context cancellation.
@@ -115,20 +135,14 @@ func (p *Processor) Run(ctx context.Context) error {
 
 // runJob executes the job payload. This is intentionally simple and can be extended.
 func (p *Processor) runJob(ctx context.Context, job models.Job) error {
-	// Simulate a failure for testing when payload contains {"should_fail": true}.
-	if val, ok := job.Payload["should_fail"].(bool); ok && val {
-		return errors.New("simulated failure requested by payload.should_fail")
-	}
-	// Simulate slow jobs when payload includes duration_ms.
-	if ms, ok := asInt(job.Payload["duration_ms"]); ok && ms > 0 {
-		sleep := time.Duration(ms) * time.Millisecond
-		// If work would exceed lease, extend once.
-		if sleep > p.cfg.VisibilityTimeout/2 {
-			_ = p.queue.ExtendLease(ctx, job.ID, sleep)
+	handler, ok := p.handlers[job.Type]
+	if !ok {
+		if p.defaultHandler == nil {
+			return fmt.Errorf("no handler registered for type %q", job.Type)
 		}
-		time.Sleep(sleep)
+		handler = p.defaultHandler
 	}
-	return nil
+	return handler(ctx, job)
 }
 
 func backoffWithJitter(base, max time.Duration, attempt int) time.Duration {
@@ -155,4 +169,22 @@ func asInt(v any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// handleDefault keeps backward-compatible behavior for simulated jobs.
+func (p *Processor) handleDefault(ctx context.Context, job models.Job) error {
+	// Simulate a failure for testing when payload contains {"should_fail": true}.
+	if val, ok := job.Payload["should_fail"].(bool); ok && val {
+		return errors.New("simulated failure requested by payload.should_fail")
+	}
+	// Simulate slow jobs when payload includes duration_ms.
+	if ms, ok := asInt(job.Payload["duration_ms"]); ok && ms > 0 {
+		sleep := time.Duration(ms) * time.Millisecond
+		// If work would exceed lease, extend once.
+		if sleep > p.cfg.VisibilityTimeout/2 {
+			_ = p.queue.ExtendLease(ctx, job.ID, sleep)
+		}
+		time.Sleep(sleep)
+	}
+	return nil
 }

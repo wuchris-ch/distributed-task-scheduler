@@ -40,6 +40,12 @@ func main() {
 	q := queue.NewRedisQueue(cfg)
 	processor := workerproc.NewProcessor(cfg, q, st)
 
+	imageHandler, err := workerproc.NewImageHandler(ctx, cfg)
+	if err != nil {
+		log.Fatalf("init image handler: %v", err)
+	}
+	processor.RegisterHandler("resize_image", imageHandler.Handle)
+
 	go func() {
 		if err := http.ListenAndServe(cfg.MetricsAddr, telemetry.Handler()); err != nil {
 			log.Printf("metrics server stopped: %v", err)
