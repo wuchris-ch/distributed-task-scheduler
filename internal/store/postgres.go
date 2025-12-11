@@ -243,6 +243,16 @@ func (s *Store) UpdateAttempts(ctx context.Context, id string, attempts int, nex
 	return err
 }
 
+// SetWorkerID updates the job's payload to include the worker ID that processed it.
+func (s *Store) SetWorkerID(ctx context.Context, id string, workerID string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE jobs
+		SET payload = payload || $2::jsonb, updated_at = NOW()
+		WHERE id = $1
+	`, id, fmt.Sprintf(`{"worker_id":"%s"}`, workerID))
+	return err
+}
+
 // VisibleJobs returns count of jobs ready to run (next_run_at <= now and queued).
 func (s *Store) VisibleJobs(ctx context.Context) (int64, error) {
 	var n int64
@@ -266,4 +276,60 @@ func emptyToNil(v string) *string {
 		return nil
 	}
 	return &v
+}
+
+// JobStats returns counts of jobs by status.
+func (s *Store) JobStats(ctx context.Context) (map[string]int64, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT status, COUNT(*) FROM jobs GROUP BY status
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query job stats: %w", err)
+	}
+	defer rows.Close()
+
+	stats := make(map[string]int64)
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, fmt.Errorf("scan job stats: %w", err)
+		}
+		stats[status] = count
+	}
+	return stats, nil
+}
+
+// ListRecentJobs returns the most recent jobs, newest first.
+func (s *Store) ListRecentJobs(ctx context.Context, limit int) ([]models.Job, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, type, priority, tenant, payload, status, attempts, max_attempts, next_run_at, last_error, idempotency_key, created_at, updated_at
+		FROM jobs
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query recent jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var jobs []models.Job
+	for rows.Next() {
+		var job models.Job
+		var payloadJSON []byte
+		var lastErr pgtype.Text
+		var idem pgtype.Text
+
+		if err := rows.Scan(&job.ID, &job.Type, &job.Priority, &job.Tenant, &payloadJSON, &job.Status, &job.Attempts, &job.MaxAttempts, &job.NextRunAt, &lastErr, &idem, &job.CreatedAt, &job.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan job: %w", err)
+		}
+
+		if err := json.Unmarshal(payloadJSON, &job.Payload); err != nil {
+			return nil, fmt.Errorf("unmarshal payload: %w", err)
+		}
+		job.LastError = textPtr(lastErr)
+		job.IdempotencyKey = textPtr(idem)
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
 }

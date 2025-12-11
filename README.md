@@ -213,10 +213,10 @@ git clone https://github.com/wuchris-ch/distributed-task-scheduler.git
 cd distributed-task-scheduler
 
 # Start the system with 3 worker nodes
-docker-compose up -d --scale worker=3
+docker compose up -d --scale worker=3
 
 # Verify all services are running
-docker-compose ps
+docker compose ps
 ```
 
 **Expected Output:**
@@ -248,7 +248,7 @@ Navigate to **[http://localhost:8080](http://localhost:8080)**
 - Check which worker processed it in the logs:
 
 ```bash
-docker-compose logs worker | grep "processing job"
+docker compose logs worker | grep "processing job"
 ```
 
 #### 4️⃣ **Chaos Engineering: Kill a Worker**
@@ -257,13 +257,13 @@ While an image is processing, simulate a node failure:
 
 ```bash
 # Find a worker processing a job
-docker-compose ps
+docker compose ps
 
 # Kill it mid-processing
 docker stop distributed-task-scheduler-worker-2
 
 # Monitor the logs to see another worker reclaim the job
-docker-compose logs --tail=50 worker
+docker compose logs --tail=50 worker
 ```
 
 **Expected behavior:**
@@ -273,7 +273,7 @@ docker-compose logs --tail=50 worker
 
 **Restore the worker:**
 ```bash
-docker-compose up -d --scale worker=3
+docker compose up -d --scale worker=3
 ```
 
 ### Monitoring & Debugging
@@ -298,7 +298,7 @@ curl http://localhost:8080/dlq | jq
 
 #### Watch Audit Logs (PostgreSQL)
 ```bash
-docker-compose exec postgres psql -U postgres -d tasks \
+docker compose exec postgres psql -U postgres -d tasks \
   -c "SELECT * FROM audit_logs ORDER BY ts DESC LIMIT 10;"
 ```
 
@@ -483,7 +483,7 @@ git clone https://github.com/wuchris-ch/distributed-task-scheduler.git
 cd distributed-task-scheduler
 
 # 2. Start infrastructure (PostgreSQL + Redis)
-docker-compose up -d postgres redis
+docker compose up -d postgres redis
 
 # 3. Run the API server
 go run cmd/api/main.go
@@ -536,7 +536,7 @@ export RATE_LIMIT_REFILL=10.0
 ### Stopping Services
 
 ```bash
-docker-compose down
+docker compose down
 ```
 
 ---
@@ -665,7 +665,7 @@ ON CONFLICT (key) DO NOTHING;
 |--------|-------|
 | **Throughput** | ~500 jobs/sec (3-node cluster) |
 | **Latency (P99)** | <100ms (queuing overhead) |
-| **Worker Scaling** | Horizontal (add more `docker-compose up -d --scale worker=N`) |
+| **Worker Scaling** | Horizontal (add more `docker compose up -d --scale worker=N`) |
 | **Max Job Size** | 25 MB (configurable) |
 | **Default Visibility Timeout** | 30s |
 | **Max Retry Attempts** | 5 (configurable) |

@@ -226,6 +226,16 @@ func (q *RedisQueue) ReadyDepth(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
+// InFlightCount returns the number of jobs currently being processed.
+func (q *RedisQueue) InFlightCount(ctx context.Context) (int64, error) {
+	return q.client.ZCard(ctx, q.inflightKey).Result()
+}
+
+// DLQCount returns the number of jobs in the dead letter queue.
+func (q *RedisQueue) DLQCount(ctx context.Context) (int64, error) {
+	return q.client.LLen(ctx, q.dlqKey).Result()
+}
+
 var dequeueScript = redis.NewScript(`
 local inflight = KEYS[#KEYS]
 for i=1,#KEYS-1 do

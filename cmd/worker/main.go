@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -38,7 +39,19 @@ func main() {
 	}
 
 	q := queue.NewRedisQueue(cfg)
-	processor := workerproc.NewProcessor(cfg, q, st)
+
+	// Generate a unique worker ID from hostname or env var
+	workerID := os.Getenv("WORKER_ID")
+	if workerID == "" {
+		hostname, _ := os.Hostname()
+		if hostname != "" {
+			workerID = hostname
+		} else {
+			workerID = fmt.Sprintf("worker-%d", os.Getpid())
+		}
+	}
+
+	processor := workerproc.NewProcessorWithID(cfg, q, st, workerID)
 
 	imageHandler, err := workerproc.NewImageHandler(ctx, cfg)
 	if err != nil {

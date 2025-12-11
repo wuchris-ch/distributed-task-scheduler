@@ -22,17 +22,24 @@ type Processor struct {
 	store          *store.Store
 	handlers       map[string]Handler
 	defaultHandler Handler
+	workerID       string
 }
 
 // Handler executes a job for a given type.
 type Handler func(ctx context.Context, job models.Job) error
 
 func NewProcessor(cfg config.Config, q *queue.RedisQueue, st *store.Store) *Processor {
+	return NewProcessorWithID(cfg, q, st, "")
+}
+
+// NewProcessorWithID creates a processor with a specific worker ID for tracking.
+func NewProcessorWithID(cfg config.Config, q *queue.RedisQueue, st *store.Store, workerID string) *Processor {
 	p := &Processor{
 		cfg:      cfg,
 		queue:    q,
 		store:    st,
 		handlers: make(map[string]Handler),
+		workerID: workerID,
 	}
 	p.defaultHandler = p.handleDefault
 	return p
@@ -92,6 +99,9 @@ func (p *Processor) Run(ctx context.Context) error {
 		}
 
 		_ = p.store.UpdateJobStatus(ctx, job.ID, models.StatusInProgress, job.Attempts, job.NextRunAt, nil)
+		if p.workerID != "" {
+			_ = p.store.SetWorkerID(ctx, job.ID, p.workerID)
+		}
 		telemetry.InFlightGauge.Inc()
 		err = p.runJob(ctx, job)
 		if err == nil {

@@ -61,6 +61,8 @@ func (s *Server) Router() http.Handler {
 	r.Get("/jobs/{id}", s.handleGetJob)
 	r.Post("/jobs/{id}/cancel", s.handleCancel)
 	r.Get("/dlq", s.handleDLQ)
+	r.Get("/stats", s.handleStats)
+	r.Get("/jobs", s.handleListJobs)
 	return r
 }
 
@@ -301,6 +303,79 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"output_path":     job.Payload["output_path"],
 		"last_error":      job.LastError,
 	})
+}
+
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Get queue depths from Redis
+	readyCount, _ := s.queue.ReadyDepth(ctx)
+	inflightCount, _ := s.queue.InFlightCount(ctx)
+	dlqCount, _ := s.queue.DLQCount(ctx)
+
+	// Get job counts from PostgreSQL
+	jobStats, err := s.store.JobStats(ctx)
+	if err != nil {
+		jobStats = make(map[string]int64)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"queue": map[string]int64{
+			"ready":    readyCount,
+			"inflight": inflightCount,
+			"dlq":      dlqCount,
+		},
+		"jobs": jobStats,
+	})
+}
+
+func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	jobs, err := s.store.ListRecentJobs(r.Context(), limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Transform jobs for frontend display
+	type jobResponse struct {
+		ID             string  `json:"id"`
+		Type           string  `json:"type"`
+		Status         string  `json:"status"`
+		Attempts       int     `json:"attempts"`
+		MaxAttempts    int     `json:"max_attempts"`
+		WorkerID       string  `json:"worker_id,omitempty"`
+		OutputFilename string  `json:"output_filename,omitempty"`
+		LastError      *string `json:"last_error,omitempty"`
+		CreatedAt      string  `json:"created_at"`
+	}
+
+	var response []jobResponse
+	for _, job := range jobs {
+		jr := jobResponse{
+			ID:          job.ID,
+			Type:        job.Type,
+			Status:      job.Status,
+			Attempts:    job.Attempts,
+			MaxAttempts: job.MaxAttempts,
+			LastError:   job.LastError,
+			CreatedAt:   job.CreatedAt.Format(time.RFC3339),
+		}
+
+		// Extract worker_id from payload if present
+		if workerID, ok := job.Payload["worker_id"].(string); ok {
+			jr.WorkerID = workerID
+		}
+
+		// Extract output filename
+		if v, ok := job.Payload["output_filename"].(string); ok {
+			jr.OutputFilename = v
+		}
+
+		response = append(response, jr)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": response})
 }
 
 func tenantFromRequest(r *http.Request) string {
