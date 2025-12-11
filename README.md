@@ -1,4 +1,4 @@
-# 🚀 Distributed Task Scheduler
+# Distributed Task Scheduler
 
 > A resilient, asynchronous job queue system built with Go, Redis, and PostgreSQL, featuring fault tolerance and horizontal scaling.
 
@@ -9,19 +9,102 @@
 
 ---
 
-## 📋 Table of Contents
+## What Problem Does This Solve?
 
-- [Architecture](#-architecture)
-- [Key Features](#-key-features)
-- [Interactive Demo](#-interactive-demo)
-- [API Documentation](#-api-documentation)
-- [Local Development](#-local-development)
-- [Tech Stack](#-tech-stack)
-- [Project Structure](#-project-structure)
+Modern enterprise applications need to handle time-consuming tasks without blocking user requests. This system provides a production-ready foundation for processing background jobs reliably at scale.
+
+### Use Cases
+
+Backoff-tolerant tasks that should not block synchronous requests:
+
+- **Email campaigns** - Sending 100,000 emails to customers shouldn't freeze your marketing dashboard
+- **Report generation** - Creating a 500-page PDF with charts shouldn't time out the user's browser
+- **Image/video processing** - Resizing product images, generating thumbnails, or transcoding videos
+- **Data imports** - Processing CSV files with millions of rows
+- **Scheduled tasks** - Running nightly data cleanup, generating analytics reports, or batch invoice processing
+
+### Why Not Just Use a Simple Queue?
+
+In enterprise environments, you need more than basic task execution:
+
+1. **Reliability** - If a server crashes mid-task, the job should automatically recover and complete
+2. **Scalability** - During peak hours, you should be able to spin up more workers to handle the load
+3. **Observability** - You need to know how many jobs are queued, which are stuck, and why they failed
+4. **Idempotency** - If a user clicks "Generate Report" twice, you shouldn't create duplicate reports
+
+### How This Project Solves It
+
+This system uses the same patterns found in production systems at Stripe, GitHub, and AWS:
+
+1. **Visibility Timeout**
+   - When a worker picks up a job, the job becomes invisible to other workers for 30 seconds.
+   - If the worker crashes or times out, the job automatically becomes available again.
+   - This prevents two workers from processing the same job, and ensures crashed jobs aren't lost.
+
+2. **Exponential Backoff with Jitter**
+   - When a job fails, the system waits before retrying: 1 second, then 2, then 4, then 8...
+   - A small random delay is added so that failed jobs don't all retry at the same moment.
+   - This prevents overloading downstream services during outages.
+
+3. **Dead Letter Queue (DLQ)**
+   - After a job fails 5 times, it stops retrying and moves to a separate queue.
+   - Engineers can inspect these failed jobs manually without blocking new work.
+   - Bad jobs don't clog the main queue forever.
+
+4. **Idempotency Keys**
+   - Each job can include a unique key. If the same key is submitted twice, the system returns the existing job instead of creating a duplicate.
+   - This is critical for payment processing where double-execution means double-charging.
+
+5. **Priority Queues**
+   - Jobs are sorted by priority. High-priority jobs (password resets) process before low-priority jobs (analytics).
+   - Urgent work doesn't get stuck behind large batch operations.
+
+**Why Redis + PostgreSQL?** Redis handles queue operations and distributed locks because it's fast (sub-millisecond). PostgreSQL stores job state and history because it's durable (survives restarts). This separation is standard in high-throughput systems.
+
+```mermaid
+flowchart LR
+    subgraph Submit
+        Client([Client]) --> API[API Server]
+        API --> PG[(PostgreSQL)]
+        API --> Redis[(Redis Queue)]
+    end
+
+    subgraph Process
+        Redis --> W1[Worker 1]
+        Redis --> W2[Worker 2]
+        Redis --> W3[Worker 3]
+    end
+
+    subgraph Result
+        W1 & W2 & W3 --> PG
+        W1 & W2 & W3 --> Storage[File Storage]
+    end
+
+    subgraph "Failure Handling"
+        W1 & W2 & W3 -.->|crash/timeout| Redis
+        W1 & W2 & W3 -.->|max retries| DLQ[Dead Letter Queue]
+    end
+```
+
+**Flow**: Client submits job → API saves to PostgreSQL + enqueues to Redis → Workers compete to claim jobs → Results saved to storage → Client polls for status.
+
+**On failure**: Jobs auto-retry with exponential backoff. Crashed workers' jobs return to queue after timeout. Permanently failed jobs go to DLQ.
 
 ---
 
-## 🏗 Architecture
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Key Features](#key-features)
+- [Interactive Demo](#interactive-demo)
+- [API Documentation](#api-documentation)
+- [Local Development](#local-development)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+
+---
+
+## Architecture
 
 ```mermaid
 graph TD
@@ -62,11 +145,11 @@ graph TD
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-### 🔐 Why This Is Technically Impressive
+### Technical Implementation
 
-#### 1️⃣ **Distributed Concurrency Without Race Conditions**
+#### 1️⃣ **Distributed Concurrency**
 - Multiple worker nodes process jobs in parallel
 - Redis atomic operations (`BLPOP`, `ZADD`) prevent duplicate processing
 - Lease-based job acquisition with configurable visibility timeouts
@@ -116,7 +199,7 @@ ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 ---
 
-## 🎮 Interactive Demo
+## Interactive Demo
 
 ### Prerequisites
 - Docker & Docker Compose
@@ -183,9 +266,9 @@ docker stop distributed-task-scheduler-worker-2
 docker-compose logs --tail=50 worker
 ```
 
-**What you'll see:**
+**Expected behavior:**
 - The killed worker's job lease expires after the visibility timeout (default: 30s)
-- Another worker automatically picks up the job
+- Another worker reclaims the job
 - The job completes successfully despite the failure
 
 **Restore the worker:**
@@ -221,7 +304,7 @@ docker-compose exec postgres psql -U postgres -d tasks \
 
 ---
 
-## 📡 API Documentation
+## API Documentation
 
 ### Base URL
 `http://localhost:8080`
@@ -385,7 +468,7 @@ curl http://localhost:8080/healthz
 
 ---
 
-## 💻 Local Development
+## Local Development
 
 ### Prerequisites
 - **Go 1.23+**
@@ -458,7 +541,7 @@ docker-compose down
 
 ---
 
-## 🛠 Tech Stack
+## Tech Stack
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
@@ -474,7 +557,7 @@ docker-compose down
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```
 distributed-task-scheduler/
@@ -500,7 +583,7 @@ distributed-task-scheduler/
 
 ---
 
-## 🔍 How It Works
+## How It Works
 
 ### Job Lifecycle
 
@@ -557,7 +640,7 @@ ON CONFLICT (key) DO NOTHING;
 
 ---
 
-## 🎯 Key Design Decisions
+## Key Design Decisions
 
 ### Why Redis for the Queue?
 - **Atomic Operations**: `BLPOP`, `ZADD` provide distributed locking primitives
@@ -576,7 +659,7 @@ ON CONFLICT (key) DO NOTHING;
 
 ---
 
-## 📊 Performance Characteristics
+## Performance Characteristics
 
 | Metric | Value |
 |--------|-------|
@@ -589,7 +672,7 @@ ON CONFLICT (key) DO NOTHING;
 
 ---
 
-## 🧪 Testing Strategy
+## Testing Strategy
 
 ### Unit Tests
 - Mock-based testing for handlers (`image_handler_test.go`)
@@ -605,7 +688,7 @@ ON CONFLICT (key) DO NOTHING;
 
 ---
 
-## 🚀 Future Enhancements
+## Future Enhancements
 
 - [ ] **Priority-based scheduling** (high/low priority queues)
 - [ ] **Job dependencies** (DAG-based workflows)
@@ -616,11 +699,10 @@ ON CONFLICT (key) DO NOTHING;
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙌 Acknowledgments
+## Acknowledgments
 
-- Inspired by production systems at **[Inngest](https://www.inngest.com/)**, **[Temporal](https://temporal.io/)**, and **[Celery](https://docs.celeryq.dev/)**
-- Built as a learning project to demonstrate distributed systems expertise
+Inspired by production systems at **[Inngest](https://www.inngest.com/)**, **[Temporal](https://temporal.io/)**, and **[Celery](https://docs.celeryq.dev/)**.

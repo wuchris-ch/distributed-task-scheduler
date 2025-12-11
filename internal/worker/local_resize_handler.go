@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/disintegration/imaging"
 	"golang.org/x/image/draw"
 
 	"distributed-task-scheduler/internal/models"
@@ -74,6 +75,9 @@ func (h *LocalResizeHandler) Handle(ctx context.Context, job models.Job) error {
 	if err != nil {
 		return fmt.Errorf("decode image: %w", err)
 	}
+
+	// Convert to grayscale
+	src = imaging.Grayscale(src)
 
 	if src.Bounds().Dx() == 0 || src.Bounds().Dy() == 0 {
 		return errors.New("invalid image dimensions")
